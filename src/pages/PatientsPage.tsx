@@ -19,6 +19,9 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { usePracticeId } from '@/lib/practice'
 import { fetchPatients, qk, type Patient } from '@/lib/queries'
 import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/lib/auth'
+import { writeAudit } from '@/lib/audit'
+import { EmptyState } from '@/components/EmptyState'
 
 type PatientForm = {
   first_name: string
@@ -68,6 +71,7 @@ function toNullable(s: string): string | null {
 
 export function PatientsPage() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const { data: practiceId } = usePracticeId()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
@@ -106,14 +110,19 @@ export function PatientsPage() {
       if (id) {
         const { error } = await supabase.from('patients').update(payload).eq('id', id)
         if (error) throw error
+        return id
       } else {
-        const { error } = await supabase.from('patients').insert({ ...payload, practice_id: practiceId! })
+        const { data, error } = await supabase.from('patients').insert({ ...payload, practice_id: practiceId! }).select('id').single()
         if (error) throw error
+        return data.id as string
       }
     },
-    onSuccess: (_, { id }) => {
+    onSuccess: (patientId, { id }) => {
       queryClient.invalidateQueries({ queryKey: qk.patients(practiceId!) })
       toast.success(id ? 'Patient updated' : 'Patient added')
+      if (practiceId && user) {
+        writeAudit(practiceId, user.id, id ? 'update_patient' : 'create_patient', 'patients', patientId)
+      }
       setDialogOpen(false)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -123,10 +132,14 @@ export function PatientsPage() {
     mutationFn: async (id: string) => {
       const { error } = await supabase.from('patients').update({ is_archived: true }).eq('id', id)
       if (error) throw error
+      return id
     },
-    onSuccess: () => {
+    onSuccess: (patientId) => {
       queryClient.invalidateQueries({ queryKey: qk.patients(practiceId!) })
       toast.success('Patient archived')
+      if (practiceId && user) {
+        writeAudit(practiceId, user.id, 'archive_patient', 'patients', patientId)
+      }
       setArchiveId(null)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -174,9 +187,20 @@ export function PatientsPage() {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : filtered.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {patients.length === 0 ? 'No patients yet. Add your first patient.' : 'No patients match your search.'}
-        </p>
+        patients.length === 0 ? (
+          <EmptyState
+            icon={Search}
+            title="No patients yet"
+            description="Add your first patient to get started."
+            action={<button className="text-sm text-primary hover:underline" onClick={openAdd}>Add a patient</button>}
+          />
+        ) : (
+          <EmptyState
+            icon={Search}
+            title="No patients match your search"
+            description={`No results for "${search}". Try a different name.`}
+          />
+        )
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
           <table className="w-full text-sm">

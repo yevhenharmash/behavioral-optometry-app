@@ -33,7 +33,7 @@ export function TodayPage() {
       <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl">
         <StatCard label="Today's appointments" value={stats ? String(stats.apptCount) : '—'} />
         <StatCard label="Active VT programs" value={stats ? String(stats.vtCount) : '—'} />
-        <StatCard label="Pending intake drafts" value="—" />
+        <StatCard label="Pending intake drafts" value={stats ? String(stats.draftCount) : '—'} />
       </div>
     </div>
   )

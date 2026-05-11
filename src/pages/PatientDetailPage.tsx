@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm, Controller } from 'react-hook-form'
-import { format, parseISO, differenceInWeeks, differenceInYears } from 'date-fns'
+import { format, parseISO, differenceInWeeks, differenceInYears, addDays } from 'date-fns'
 import {
   ArrowLeft, Pencil, Calendar, Activity as ActivityIcon, FlaskConical, ClipboardList,
-  Plus, Clock, Check, X, Trash2, BarChart2, Star,
+  Plus, Clock, Check, X, Trash2, BarChart2, Star, Trophy, Link2, Copy, Mail,
+  Timer, Play, Pause, RotateCcw, ChevronDown, ChevronUp, Wand2, FileDown,
 } from 'lucide-react'
+import { pdf } from '@react-pdf/renderer'
+import { SummaryPdf } from '@/lib/pdf/SummaryPdf'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -24,11 +28,15 @@ import {
 import {
   fetchPatient, fetchPatientAppointments, fetchVtPrograms,
   fetchRxs, fetchApptNotes, fetchActivities, fetchSessionActivities, fetchSurveyResponses,
-  fetchReferrers, fetchPatientReferrers, qk,
-  type Patient, type AppointmentWithPatient, type Activity,
+  fetchReferrers, fetchPatientReferrers, fetchAchievementEntries, fetchIntakeLinks,
+  fetchPractice, qk,
+  type Patient, type AppointmentWithPatient, type Activity, type AchievementEntry,
 } from '@/lib/queries'
 import { supabase } from '@/lib/supabase'
 import { usePracticeId } from '@/lib/practice'
+import { useAuth } from '@/lib/auth'
+import { writeAudit } from '@/lib/audit'
+import { EmptyState } from '@/components/EmptyState'
 
 // ─── shared label maps ────────────────────────────────────────────────────────
 const APPT_LABELS: Record<string, string> = {
@@ -244,6 +252,8 @@ function OverviewTab({ patient, practiceId }: { patient: Patient; practiceId: st
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <IntakeLinkSection patient={patient} practiceId={practiceId} />
     </div>
   )
 }
@@ -488,11 +498,13 @@ function ApptNotesDialog({
   open,
   onClose,
   practiceId,
+  patient,
 }: {
   appt: AppointmentWithPatient
   open: boolean
   onClose: () => void
   practiceId: string
+  patient: Patient
 }) {
   const queryClient = useQueryClient()
 
@@ -501,6 +513,33 @@ function ApptNotesDialog({
     enabled: open,
     queryFn: () => fetchApptNotes(appt.id),
   })
+
+  // Lift sessionActivities so SummaryComposer can access them
+  const { data: sessionActivitiesRaw = [] } = useQuery({
+    queryKey: qk.sessionActivities(notes?.therapySession?.id ?? ''),
+    enabled: !!notes?.therapySession?.id,
+    queryFn: () => fetchSessionActivities(notes!.therapySession!.id),
+  })
+
+  // Fetch activity detail (for demo_video_url) — activities are already in allActivities
+  const { data: allActivities = [] } = useQuery({
+    queryKey: qk.activities(practiceId),
+    enabled: !!practiceId,
+    queryFn: () => fetchActivities(practiceId),
+  })
+
+  const activitiesForSummary = sessionActivitiesRaw.map((sa) => {
+    const full = allActivities.find((a) => a.id === sa.activity_id)
+    return {
+      name: sa.activities.name,
+      level_label: sa.level_label,
+      observations: sa.observations,
+      demo_video_url: full?.demo_video_url ?? null,
+    }
+  })
+
+  const [parentBody, setParentBody] = useState(appt.summary_email_body ?? '')
+  const [referrerBody, setReferrerBody] = useState(appt.summary_referrer_body ?? '')
 
   const { register, handleSubmit, control, reset } = useForm<NotesForm>({
     values: {
@@ -518,8 +557,8 @@ function ApptNotesDialog({
         .from('appointments')
         .update({
           status: values.status as AppointmentWithPatient['status'],
-          summary_email_body: toNullable(values.summary_email_body),
-          summary_referrer_body: toNullable(values.summary_referrer_body),
+          summary_email_body: toNullable(parentBody),
+          summary_referrer_body: toNullable(referrerBody),
         })
         .eq('id', appt.id)
       if (apptErr) throw apptErr
@@ -573,7 +612,7 @@ function ApptNotesDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && handleClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
             {APPT_LABELS[appt.type]} — {format(parseISO(appt.starts_at), 'd MMM yyyy, h:mm a')}
@@ -583,76 +622,77 @@ function ApptNotesDialog({
         {isLoading ? (
           <p className="text-sm text-muted-foreground py-4">Loading…</p>
         ) : (
-          <ScrollArea className="max-h-[70vh]">
-            <form onSubmit={handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4 pr-1">
-              <FormField label="Status">
-                <Controller
-                  name="status"
-                  control={control}
-                  render={({ field }) => (
-                    <Select value={field.value} onValueChange={field.onChange}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(STATUS_LABELS).map(([v, l]) => (
-                          <SelectItem key={v} value={v}>{l}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  )}
-                />
-              </FormField>
-
-              <FormField label="Notes">
-                <Textarea
-                  rows={4}
-                  placeholder="Exam findings, observations, plan…"
-                  {...register('free_text')}
-                />
-              </FormField>
-
+          <ScrollArea className="max-h-[80vh]">
+            <div className="space-y-4 pr-1">
+              {/* Session timer — therapy sessions only */}
               {appt.type === 'therapy_session' && (
-                <>
-                  <FormField label="In-office Observations">
-                    <Textarea
-                      rows={2}
-                      placeholder="General session observations…"
-                      {...register('in_office_observations')}
-                    />
-                  </FormField>
-
-                  <div className="border-t border-border pt-4">
-                    <ActivityLogSection
-                      apptId={appt.id}
-                      practiceId={practiceId}
-                      therapySessionId={notes?.therapySession?.id ?? null}
-                    />
-                  </div>
-                </>
+                <SessionTimer durationMin={appt.duration_min} />
               )}
 
-              <div className="border-t border-border pt-4 space-y-4">
-                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Summaries</p>
-                <FormField label="Patient / Family Summary">
-                  <Textarea
-                    rows={3}
-                    placeholder="Plain-language summary for patient or guardian…"
-                    {...register('summary_email_body')}
+              <form onSubmit={handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4" id="appt-notes-form">
+                <FormField label="Status">
+                  <Controller
+                    name="status"
+                    control={control}
+                    render={({ field }) => (
+                      <Select value={field.value} onValueChange={field.onChange}>
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {Object.entries(STATUS_LABELS).map(([v, l]) => (
+                            <SelectItem key={v} value={v}>{l}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   />
                 </FormField>
-                <FormField label="Referrer Report">
-                  <Textarea
-                    rows={3}
-                    placeholder="Clinical summary for referring practitioner…"
-                    {...register('summary_referrer_body')}
-                  />
-                </FormField>
-              </div>
 
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
-                <Button type="submit" disabled={saveMutation.isPending}>Save Notes</Button>
-              </DialogFooter>
-            </form>
+                <FormField label="Notes">
+                  <Textarea
+                    rows={4}
+                    placeholder="Exam findings, observations, plan…"
+                    {...register('free_text')}
+                  />
+                </FormField>
+
+                {appt.type === 'therapy_session' && (
+                  <>
+                    <FormField label="In-office Observations">
+                      <Textarea
+                        rows={2}
+                        placeholder="General session observations…"
+                        {...register('in_office_observations')}
+                      />
+                    </FormField>
+
+                    <div className="border-t border-border pt-4">
+                      <ActivityLogSection
+                        apptId={appt.id}
+                        practiceId={practiceId}
+                        therapySessionId={notes?.therapySession?.id ?? null}
+                      />
+                    </div>
+                  </>
+                )}
+
+                <SummaryComposerSection
+                  appt={appt}
+                  patient={patient}
+                  notes={notes}
+                  activities={activitiesForSummary}
+                  practiceId={practiceId}
+                  parentBody={parentBody}
+                  referrerBody={referrerBody}
+                  onParentBodyChange={setParentBody}
+                  onReferrerBodyChange={setReferrerBody}
+                />
+
+                <DialogFooter>
+                  <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
+                  <Button type="submit" disabled={saveMutation.isPending}>Save Notes</Button>
+                </DialogFooter>
+              </form>
+            </div>
           </ScrollArea>
         )}
       </DialogContent>
@@ -661,8 +701,9 @@ function ApptNotesDialog({
 }
 
 // ─── Appointments tab ─────────────────────────────────────────────────────────
-function AppointmentsTab({ patientId, practiceId }: { patientId: string; practiceId: string }) {
+function AppointmentsTab({ patientId, practiceId, patient }: { patientId: string; practiceId: string; patient: Patient }) {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
   const [notesAppt, setNotesAppt] = useState<AppointmentWithPatient | null>(null)
   const [apptDialogOpen, setApptDialogOpen] = useState(false)
 
@@ -679,20 +720,22 @@ function AppointmentsTab({ patientId, practiceId }: { patientId: string; practic
   const createMutation = useMutation({
     mutationFn: async (values: ApptForm) => {
       const starts_at = new Date(`${values.date}T${values.time}:00`).toISOString()
-      const { error } = await supabase.from('appointments').insert({
+      const { data, error } = await supabase.from('appointments').insert({
         practice_id: practiceId,
         patient_id: patientId,
         starts_at,
         duration_min: Number(values.duration_min),
         type: values.type as AppointmentWithPatient['type'],
         status: values.status as AppointmentWithPatient['status'],
-      })
+      }).select('id').single()
       if (error) throw error
+      return data.id as string
     },
-    onSuccess: () => {
+    onSuccess: (apptId) => {
       queryClient.invalidateQueries({ queryKey: qk.patientAppointments(patientId) })
       queryClient.invalidateQueries({ queryKey: ['appointments'] })
       toast.success('Appointment created')
+      if (user) writeAudit(practiceId, user.id, 'create_appointment', 'appointments', apptId)
       setApptDialogOpen(false)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -709,7 +752,16 @@ function AppointmentsTab({ patientId, practiceId }: { patientId: string; practic
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : appointments.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No appointments yet.</p>
+        <EmptyState
+          icon={Calendar}
+          title="No appointments yet"
+          description="Create the first appointment to begin tracking visits."
+          action={
+            <Button size="sm" onClick={() => { reset(); setApptDialogOpen(true) }}>
+              <Plus className="w-4 h-4 mr-1" /> New Appointment
+            </Button>
+          }
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
@@ -758,6 +810,7 @@ function AppointmentsTab({ patientId, practiceId }: { patientId: string; practic
           open={!!notesAppt}
           onClose={() => setNotesAppt(null)}
           practiceId={practiceId}
+          patient={patient}
         />
       )}
 
@@ -818,6 +871,8 @@ type ProgramForm = { diagnosis: string; goals: string }
 
 function VtProgramTab({ patientId }: { patientId: string }) {
   const queryClient = useQueryClient()
+  const { user } = useAuth()
+  const { data: practiceId } = usePracticeId()
   const [startOpen, setStartOpen] = useState(false)
   const [endConfirmId, setEndConfirmId] = useState<string | null>(null)
 
@@ -838,19 +893,23 @@ function VtProgramTab({ patientId }: { patientId: string }) {
         .split('\n')
         .map((g) => g.trim())
         .filter(Boolean)
-      const { error } = await supabase.from('vt_programs').insert({
+      const { data, error } = await supabase.from('vt_programs').insert({
         patient_id: patientId,
         diagnosis: values.diagnosis,
         goals,
         ended_at: null,
         source_template_key: null,
-      })
+      }).select('id').single()
       if (error) throw error
+      return data.id as string
     },
-    onSuccess: () => {
+    onSuccess: (programId) => {
       queryClient.invalidateQueries({ queryKey: qk.vtProgram(patientId) })
       queryClient.invalidateQueries({ queryKey: ['today-stats'] })
       toast.success('VT Program started')
+      if (practiceId && user) {
+        writeAudit(practiceId, user.id, 'create_vt_program', 'vt_programs', programId)
+      }
       setStartOpen(false)
       reset()
     },
@@ -864,11 +923,15 @@ function VtProgramTab({ patientId }: { patientId: string }) {
         .update({ ended_at: new Date().toISOString() })
         .eq('id', id)
       if (error) throw error
+      return id
     },
-    onSuccess: () => {
+    onSuccess: (programId) => {
       queryClient.invalidateQueries({ queryKey: qk.vtProgram(patientId) })
       queryClient.invalidateQueries({ queryKey: ['today-stats'] })
       toast.success('Program ended')
+      if (practiceId && user) {
+        writeAudit(practiceId, user.id, 'end_vt_program', 'vt_programs', programId)
+      }
       setEndConfirmId(null)
     },
     onError: (e: Error) => toast.error(e.message),
@@ -1056,7 +1119,16 @@ function RxTab({ patientId }: { patientId: string }) {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : rxs.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No prescriptions recorded.</p>
+        <EmptyState
+          icon={FlaskConical}
+          title="No prescriptions recorded"
+          description="Add the patient's current spectacle or contact lens Rx."
+          action={
+            <Button size="sm" onClick={() => { reset(); setAddOpen(true) }}>
+              <Plus className="w-4 h-4 mr-1" /> Add Rx
+            </Button>
+          }
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden">
           <table className="w-full text-sm">
@@ -1395,7 +1467,12 @@ function SurveysTab({ patientId }: { patientId: string }) {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : cissResponses.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No surveys recorded yet.</p>
+        <EmptyState
+          icon={ClipboardList}
+          title="No CISS surveys yet"
+          description="Take the 15-item survey to track convergence insufficiency symptoms over time."
+          action={<Button size="sm" onClick={() => setCissOpen(true)}><Plus className="w-4 h-4 mr-1" /> Take Survey</Button>}
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden max-w-lg">
           <table className="w-full text-sm">
@@ -1440,6 +1517,942 @@ function EditSection({ title, children }: { title: string; children: React.React
       <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">{title}</h3>
       {children}
     </section>
+  )
+}
+
+// ─── Achievement Report tab (Phase 4b) ───────────────────────────────────────
+
+const ACHIEVEMENT_CATEGORIES: Record<AchievementEntry['category'], string> = {
+  reading: 'Reading',
+  academic: 'Academic',
+  emotional: 'Emotional / Behavioural',
+  ocular_symptoms: 'Ocular Symptoms',
+  localization: 'Localization',
+  goals: 'Goals',
+}
+
+const SCALE_LABELS: Record<number, string> = {
+  1: 'Very Poor', 2: 'Poor', 3: 'Fair', 4: 'Good', 5: 'Excellent',
+}
+
+type AchievementForm = {
+  category: AchievementEntry['category']
+  item: string
+  scale: string
+}
+
+function AchievementScaleDots({ scale, baseline }: { scale: number; baseline?: number }) {
+  return (
+    <div className="flex items-center gap-0.5">
+      {[1, 2, 3, 4, 5].map((v) => (
+        <div
+          key={v}
+          className={`w-3 h-3 rounded-full border transition-colors ${
+            v <= scale
+              ? 'bg-primary border-primary'
+              : baseline !== undefined && v <= baseline
+              ? 'bg-muted border-border'
+              : 'bg-transparent border-border/40'
+          }`}
+          title={SCALE_LABELS[v]}
+        />
+      ))}
+    </div>
+  )
+}
+
+function AchievementTab({ patientId }: { patientId: string }) {
+  const queryClient = useQueryClient()
+  const [addOpen, setAddOpen] = useState(false)
+
+  const { data: entries = [], isLoading } = useQuery({
+    queryKey: qk.achievementEntries(patientId),
+    queryFn: () => fetchAchievementEntries(patientId),
+  })
+
+  const { register, handleSubmit, reset, watch, setValue } = useForm<AchievementForm>({
+    defaultValues: { category: 'reading', item: '', scale: '3' },
+  })
+
+  const saveMutation = useMutation({
+    mutationFn: async (values: AchievementForm) => {
+      const { error } = await supabase.from('achievement_entries').insert({
+        patient_id: patientId,
+        vt_program_id: null,
+        category: values.category,
+        item: values.item.trim(),
+        scale: Number(values.scale),
+      })
+      if (error) throw error
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.achievementEntries(patientId) })
+      toast.success('Achievement entry saved')
+      reset({ category: 'reading', item: '', scale: '3' })
+      setAddOpen(false)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('achievement_entries').delete().eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.achievementEntries(patientId) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // Build baseline vs latest map per (category, item)
+  const itemMap = new Map<string, { baseline: AchievementEntry; latest: AchievementEntry }>()
+  for (const entry of entries) {
+    const key = `${entry.category}::${entry.item}`
+    if (!itemMap.has(key)) {
+      itemMap.set(key, { baseline: entry, latest: entry })
+    } else {
+      itemMap.get(key)!.latest = entry
+    }
+  }
+
+  // Group by category
+  const byCategory = new Map<string, Array<{ key: string; baseline: AchievementEntry; latest: AchievementEntry }>>()
+  for (const [key, val] of itemMap) {
+    const cat = val.baseline.category
+    if (!byCategory.has(cat)) byCategory.set(cat, [])
+    byCategory.get(cat)!.push({ key, ...val })
+  }
+
+  const watchedCategory = watch('category')
+
+  return (
+    <div>
+      <div className="flex justify-end mb-4">
+        <Button size="sm" onClick={() => setAddOpen(true)}>
+          <Plus className="w-4 h-4 mr-1" /> Add Entry
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : itemMap.size === 0 ? (
+        <EmptyState
+          icon={Trophy}
+          title="No achievement entries yet"
+          description="Add baseline measurements at intake, then track progress over time."
+          action={<Button size="sm" onClick={() => setAddOpen(true)}><Plus className="w-4 h-4 mr-1" /> Add Entry</Button>}
+        />
+      ) : (
+        <div className="space-y-6 max-w-2xl">
+          {Array.from(byCategory.entries()).map(([cat, items]) => (
+            <div key={cat}>
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                {ACHIEVEMENT_CATEGORIES[cat as AchievementEntry['category']]}
+              </p>
+              <div className="border border-border rounded-lg overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/40">
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Item</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Baseline</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Current</th>
+                      <th className="text-left px-4 py-2.5 font-medium text-muted-foreground">Change</th>
+                      <th className="px-3 py-2.5" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map(({ key, baseline, latest }) => {
+                      const delta = latest.scale - baseline.scale
+                      return (
+                        <tr key={key} className="border-b border-border last:border-0">
+                          <td className="px-4 py-2.5 font-medium">{baseline.item}</td>
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <AchievementScaleDots scale={baseline.scale} />
+                              <span className="text-xs text-muted-foreground">{baseline.scale}/5</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <AchievementScaleDots scale={latest.scale} baseline={baseline.scale} />
+                              <span className="text-xs text-muted-foreground">{latest.scale}/5</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5">
+                            {delta === 0 ? (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            ) : (
+                              <span className={`text-xs font-medium ${delta > 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                {delta > 0 ? '+' : ''}{delta}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-3 py-2.5">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 text-muted-foreground hover:text-destructive"
+                              onClick={() => deleteMutation.mutate(latest.id)}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+
+          {/* Diverging delta chart */}
+          {itemMap.size > 0 && (
+            <div className="mt-4">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Progress Overview (baseline → current)</p>
+              <div className="space-y-1.5 max-w-lg">
+                {Array.from(itemMap.entries()).map(([key, { baseline, latest }]) => {
+                  const delta = latest.scale - baseline.scale
+                  const barPct = Math.abs(delta) / 4 * 100
+                  return (
+                    <div key={key} className="flex items-center gap-2 text-xs">
+                      <span className="w-32 text-right text-muted-foreground truncate">{baseline.item}</span>
+                      <div className="flex-1 h-4 flex items-center">
+                        <div className="w-1/2 flex justify-end">
+                          {delta < 0 && (
+                            <div
+                              className="h-3 rounded-l bg-red-400 dark:bg-red-600"
+                              style={{ width: `${barPct}%` }}
+                            />
+                          )}
+                        </div>
+                        <div className="w-px h-4 bg-border flex-none" />
+                        <div className="w-1/2">
+                          {delta > 0 && (
+                            <div
+                              className="h-3 rounded-r bg-green-500 dark:bg-green-600"
+                              style={{ width: `${barPct}%` }}
+                            />
+                          )}
+                        </div>
+                      </div>
+                      <span className={`w-8 text-center font-medium ${delta > 0 ? 'text-green-600 dark:text-green-400' : delta < 0 ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground'}`}>
+                        {delta > 0 ? `+${delta}` : delta === 0 ? '0' : delta}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add Achievement Entry</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4">
+            <FormField label="Category">
+              <Select
+                value={watchedCategory}
+                onValueChange={(v) => setValue('category', v as AchievementEntry['category'])}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(ACHIEVEMENT_CATEGORIES).map(([v, l]) => (
+                    <SelectItem key={v} value={v}>{l}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <FormField label="Item / Description *">
+              <Input
+                placeholder="e.g. Reading endurance, Headaches at school…"
+                {...register('item', { required: true })}
+              />
+            </FormField>
+            <FormField label="Scale (1 = Very Poor → 5 = Excellent)">
+              <Select value={watch('scale')} onValueChange={(v) => setValue('scale', v)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5].map((v) => (
+                    <SelectItem key={v} value={String(v)}>{v} — {SCALE_LABELS[v]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={saveMutation.isPending}>Save</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
+// ─── Session Timer (Phase 4c) ─────────────────────────────────────────────────
+
+function SessionTimer({ durationMin }: { durationMin: number }) {
+  const totalSecs = durationMin * 60
+  const [running, setRunning] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [pingEvery, setPingEvery] = useState(15)
+  const [collapsed, setCollapsed] = useState(false)
+  const lastPingRef = useRef(0)
+
+  useEffect(() => {
+    if (!running) return
+    const id = setInterval(() => {
+      setElapsed((e) => {
+        const ne = e + 1
+        const elapsedMin = Math.floor(ne / 60)
+        if (elapsedMin > 0 && elapsedMin % pingEvery === 0 && elapsedMin !== lastPingRef.current) {
+          lastPingRef.current = elapsedMin
+          toast('Time to log an activity result?', { duration: 8000 })
+        }
+        return ne
+      })
+    }, 1000)
+    return () => clearInterval(id)
+  }, [running, pingEvery])
+
+  const remaining = totalSecs - elapsed
+  const cappedRemaining = Math.max(0, remaining)
+  const mins = Math.floor(cappedRemaining / 60)
+  const secs = cappedRemaining % 60
+  const overrun = elapsed > totalSecs
+
+  function reset() {
+    setRunning(false)
+    setElapsed(0)
+    lastPingRef.current = 0
+  }
+
+  const pct = Math.min(100, (elapsed / totalSecs) * 100)
+
+  return (
+    <div className="border border-border rounded-lg p-3 mb-4 bg-muted/20">
+      <button
+        type="button"
+        className="w-full flex items-center justify-between text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-0"
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <span className="flex items-center gap-1.5"><Timer className="w-3.5 h-3.5" /> Session Timer</span>
+        {collapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
+      </button>
+
+      {!collapsed && (
+        <div className="mt-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-center">
+              <span className={`text-3xl font-mono font-bold tabular-nums ${overrun ? 'text-destructive' : ''}`}>
+                {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
+              </span>
+              <p className="text-xs text-muted-foreground">{overrun ? 'over time' : 'remaining'}</p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setRunning((r) => !r)}
+              >
+                {running ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                {running ? 'Pause' : 'Start'}
+              </Button>
+              <Button type="button" size="icon" variant="ghost" onClick={reset} className="h-8 w-8">
+                <RotateCcw className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${overrun ? 'bg-destructive' : 'bg-primary'}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span>Ping every</span>
+            <Select value={String(pingEvery)} onValueChange={(v) => setPingEvery(Number(v))}>
+              <SelectTrigger className="h-6 w-20 text-xs px-2">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {[5, 10, 15, 20, 30].map((m) => (
+                  <SelectItem key={m} value={String(m)}>{m} min</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <span>minutes</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Summary Composer (Phase 5a / 5b) ────────────────────────────────────────
+
+function generateParentSummary(
+  patient: Patient,
+  appt: AppointmentWithPatient,
+  freeText: string | null,
+  inOfficeObs: string | null,
+  activities: Array<{ name: string; level_label: string | null; observations: string | null; demo_video_url?: string | null }>,
+  practiceName: string,
+): string {
+  const greeting = patient.guardian_name ? `Dear ${patient.guardian_name},` : 'Dear Parent/Guardian,'
+  const name = patient.first_name
+  const apptLabel = APPT_LABELS[appt.type] ?? appt.type
+  const dateStr = format(parseISO(appt.starts_at), 'd MMMM yyyy')
+
+  const lines: string[] = [
+    greeting,
+    '',
+    `Thank you for bringing ${name} in for their ${apptLabel} appointment on ${dateStr}.`,
+  ]
+
+  if (freeText) {
+    lines.push('', 'Clinical findings:', freeText)
+  }
+
+  if (activities.length > 0) {
+    lines.push('', 'Today we worked on:')
+    for (const a of activities) {
+      let line = `• ${a.name}`
+      if (a.level_label) line += ` (${a.level_label})`
+      if (a.observations) line += ` — ${a.observations}`
+      lines.push(line)
+    }
+  }
+
+  if (inOfficeObs) {
+    lines.push('', inOfficeObs)
+  }
+
+  const homeActivities = activities.filter((a) => (a as { demo_video_url?: string | null }).demo_video_url)
+  if (homeActivities.length > 0) {
+    lines.push('', 'Home exercise videos:')
+    for (const a of homeActivities) {
+      lines.push(`• ${a.name}: ${a.demo_video_url}`)
+    }
+  }
+
+  lines.push('', 'If you have any questions, please don\'t hesitate to contact us.', '', `Warm regards,\n${practiceName}`)
+
+  return lines.join('\n')
+}
+
+function generateReferrerSummary(
+  patient: Patient,
+  appt: AppointmentWithPatient,
+  freeText: string | null,
+  inOfficeObs: string | null,
+  activities: Array<{ name: string; level_label: string | null; observations: string | null }>,
+  practiceName: string,
+  referrerName?: string,
+): string {
+  const greeting = referrerName ? `Dear ${referrerName},` : 'Dear Colleague,'
+  const apptLabel = APPT_LABELS[appt.type] ?? appt.type
+  const dateStr = format(parseISO(appt.starts_at), 'd MMMM yyyy')
+
+  const lines: string[] = [
+    greeting,
+    '',
+    `Re: ${patient.first_name} ${patient.last_name}`,
+    '',
+    `I am writing to update you on ${patient.first_name}'s progress following their ${apptLabel} appointment on ${dateStr}.`,
+  ]
+
+  if (freeText) {
+    lines.push('', 'Clinical findings:', freeText)
+  }
+
+  if (activities.length > 0) {
+    lines.push('', 'In-office activities performed:')
+    for (const a of activities) {
+      let line = `• ${a.name}`
+      if (a.level_label) line += ` (${a.level_label})`
+      if (a.observations) line += ` — ${a.observations}`
+      lines.push(line)
+    }
+  }
+
+  if (inOfficeObs) {
+    lines.push('', inOfficeObs)
+  }
+
+  lines.push('', 'Please do not hesitate to contact our practice if you require further information.', '', `Yours sincerely,\n${practiceName}`)
+
+  return lines.join('\n')
+}
+
+function SummaryComposerSection({
+  appt,
+  patient,
+  notes,
+  activities,
+  practiceId,
+  parentBody,
+  referrerBody,
+  onParentBodyChange,
+  onReferrerBodyChange,
+}: {
+  appt: AppointmentWithPatient
+  patient: Patient
+  notes: { examNote: { free_text: string | null } | null; therapySession: { in_office_observations: string | null } | null } | undefined
+  activities: Array<{ name: string; level_label: string | null; observations: string | null; demo_video_url?: string | null }>
+  practiceId: string
+  parentBody: string
+  referrerBody: string
+  onParentBodyChange: (v: string) => void
+  onReferrerBodyChange: (v: string) => void
+}) {
+  const [activeTab, setActiveTab] = useState<'parent' | 'referrer'>('parent')
+
+  const { data: practice } = useQuery({
+    queryKey: qk.practice(practiceId),
+    queryFn: () => fetchPractice(practiceId),
+  })
+
+  const { data: linkedReferrers = [] } = useQuery({
+    queryKey: qk.patientReferrers(patient.id),
+    queryFn: () => fetchPatientReferrers(patient.id),
+  })
+
+  const practiceName = practice?.name ?? 'Your Vision Therapy Practice'
+  const guardianEmail = patient.guardian_email ?? patient.email ?? ''
+
+  function generateParent() {
+    const body = generateParentSummary(
+      patient, appt,
+      notes?.examNote?.free_text ?? null,
+      notes?.therapySession?.in_office_observations ?? null,
+      activities,
+      practiceName,
+    )
+    onParentBodyChange(body)
+    toast.success('Parent summary generated')
+  }
+
+  function generateReferrer(referrerName?: string) {
+    const body = generateReferrerSummary(
+      patient, appt,
+      notes?.examNote?.free_text ?? null,
+      notes?.therapySession?.in_office_observations ?? null,
+      activities,
+      practiceName,
+      referrerName,
+    )
+    onReferrerBodyChange(body)
+    toast.success('Referrer report generated')
+  }
+
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text).then(
+      () => toast.success('Copied to clipboard'),
+      () => toast.error('Copy failed — select and copy manually'),
+    )
+  }
+
+  function openMailto(to: string, subject: string, body: string) {
+    const url = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`
+    window.open(url, '_blank')
+  }
+
+  async function downloadSummaryPdf() {
+    const apptLabel = APPT_LABELS[appt.type] ?? appt.type
+    const dateStr = format(parseISO(appt.starts_at), 'd MMM yyyy')
+    const homeActivities = activities.filter((a) => a.demo_video_url)
+    const blob = await pdf(
+      <SummaryPdf
+        practiceName={practice?.name ?? 'Vision Therapy Practice'}
+        patientName={`${patient.first_name} ${patient.last_name}`}
+        appointmentDate={dateStr}
+        appointmentType={apptLabel}
+        summaryBody={parentBody}
+        homeActivities={homeActivities}
+      />
+    ).toBlob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${patient.last_name}_${patient.first_name}_${dateStr.replace(/ /g, '_')}_summary.pdf`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const subjectParent = `${patient.first_name}'s Vision Therapy Update — ${format(parseISO(appt.starts_at), 'd MMM yyyy')}`
+  const subjectReferrer = `Re: ${patient.first_name} ${patient.last_name} — Vision Therapy Update`
+
+  return (
+    <div className="border-t border-border pt-4">
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">Summaries</p>
+      <div className="flex gap-2 mb-3">
+        <button
+          type="button"
+          className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${activeTab === 'parent' ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          onClick={() => setActiveTab('parent')}
+        >
+          Patient / Family
+        </button>
+        <button
+          type="button"
+          className={`text-xs px-3 py-1.5 rounded-md border transition-colors ${activeTab === 'referrer' ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:text-foreground'}`}
+          onClick={() => setActiveTab('referrer')}
+        >
+          Referrer Report
+        </button>
+      </div>
+
+      {activeTab === 'parent' && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Button type="button" size="sm" variant="outline" onClick={generateParent} className="h-7 text-xs">
+              <Wand2 className="w-3 h-3 mr-1" /> Generate
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              disabled={!parentBody}
+              onClick={() => copyToClipboard(parentBody)}
+            >
+              <Copy className="w-3 h-3 mr-1" /> Copy
+            </Button>
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs"
+                    disabled={!parentBody}
+                    onClick={() => openMailto(guardianEmail, subjectParent, parentBody)}
+                  >
+                    <Mail className="w-3 h-3 mr-1" /> Open in Mail
+                  </Button>
+                </TooltipTrigger>
+                {!guardianEmail && (
+                  <TooltipContent>No email on file — add one on patient profile</TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              disabled={!parentBody}
+              onClick={downloadSummaryPdf}
+            >
+              <FileDown className="w-3 h-3 mr-1" /> Download PDF
+            </Button>
+          </div>
+          <Textarea
+            rows={5}
+            placeholder="Click Generate to auto-fill, or type a plain-language summary for the family…"
+            value={parentBody}
+            onChange={(e) => onParentBodyChange(e.target.value)}
+          />
+        </div>
+      )}
+
+      {activeTab === 'referrer' && (
+        <div className="space-y-2">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {linkedReferrers.length > 0 ? (
+              linkedReferrers.map((r) => (
+                <Button
+                  key={r.id}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => generateReferrer(r.name)}
+                >
+                  <Wand2 className="w-3 h-3 mr-1" /> Generate for {r.name}
+                </Button>
+              ))
+            ) : (
+              <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={() => generateReferrer()}>
+                <Wand2 className="w-3 h-3 mr-1" /> Generate
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-7 text-xs"
+              disabled={!referrerBody}
+              onClick={() => copyToClipboard(referrerBody)}
+            >
+              <Copy className="w-3 h-3 mr-1" /> Copy
+            </Button>
+          </div>
+          {linkedReferrers.length > 0 && referrerBody && (
+            <div className="flex gap-1.5 flex-wrap">
+              {linkedReferrers.map((r) => r.email && (
+                <Button
+                  key={r.id}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => openMailto(r.email!, subjectReferrer, referrerBody)}
+                >
+                  <Mail className="w-3 h-3 mr-1" /> Mail to {r.name}
+                </Button>
+              ))}
+            </div>
+          )}
+          <Textarea
+            rows={5}
+            placeholder="Click Generate to auto-fill a professional-tone referrer report, or type manually…"
+            value={referrerBody}
+            onChange={(e) => onReferrerBodyChange(e.target.value)}
+          />
+          {linkedReferrers.length === 0 && (
+            <p className="text-xs text-muted-foreground">Link referrers to this patient on the Overview tab to enable one-click mailto.</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Intake link section (Phase 5c, OD side) ─────────────────────────────────
+
+function IntakeLinkSection({ patient, practiceId }: { patient: Patient; practiceId: string }) {
+  const queryClient = useQueryClient()
+  const [sendOpen, setSendOpen] = useState(false)
+  const [email, setEmail] = useState(patient.guardian_email ?? patient.email ?? '')
+  const [generatedLink, setGeneratedLink] = useState<string | null>(null)
+  const [importDraftId, setImportDraftId] = useState<string | null>(null)
+
+  const { data: intakeLinks = [] } = useQuery({
+    queryKey: qk.intakeLinks(patient.id),
+    queryFn: () => fetchIntakeLinks(patient.id),
+  })
+
+  const pendingLinks = intakeLinks.filter((l) => !l.used_at && new Date(l.expires_at) > new Date())
+  const usedLinks = intakeLinks.filter((l) => !!l.used_at)
+
+  const createLinkMutation = useMutation({
+    mutationFn: async (recipientEmail: string) => {
+      const token = crypto.randomUUID()
+      const expiresAt = addDays(new Date(), 7).toISOString()
+      const { error } = await supabase.from('intake_links').insert({
+        practice_id: practiceId,
+        patient_id: patient.id,
+        token,
+        email: recipientEmail,
+        expires_at: expiresAt,
+        used_at: null,
+      })
+      if (error) throw error
+      return token
+    },
+    onSuccess: (token) => {
+      queryClient.invalidateQueries({ queryKey: qk.intakeLinks(patient.id) })
+      const link = `${window.location.origin}/intake/${token}`
+      setGeneratedLink(link)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // Fetch pending drafts for this patient's used intake links
+  const usedLinkIds = usedLinks.map((l) => l.id)
+  const [pendingDrafts, setPendingDrafts] = useState<Array<{
+    id: string; intake_link_id: string; payload: Record<string, unknown>; submitted_at: string; reviewed_at: string | null
+  }>>([])
+
+  useEffect(() => {
+    if (usedLinkIds.length === 0) return
+    supabase
+      .from('patient_intake_drafts')
+      .select('*')
+      .in('intake_link_id', usedLinkIds)
+      .is('imported_patient_id', null)
+      .then(({ data }) => { if (data) setPendingDrafts(data as typeof pendingDrafts) })
+  }, [usedLinks.length])
+
+  const importMutation = useMutation({
+    mutationFn: async (draftId: string) => {
+      const draft = pendingDrafts.find((d) => d.id === draftId)
+      if (!draft) throw new Error('Draft not found')
+      const payload = draft.payload as Record<string, unknown>
+      const { error: patErr } = await supabase.from('patients').update({
+        first_name: (payload.first_name as string) || patient.first_name,
+        last_name: (payload.last_name as string) || patient.last_name,
+        dob: (payload.dob as string) || null,
+        sex: (payload.sex as Patient['sex']) || null,
+        email: (payload.email as string) || null,
+        phone: (payload.phone as string) || null,
+        guardian_name: (payload.guardian_name as string) || null,
+        guardian_email: (payload.guardian_email as string) || null,
+        guardian_phone: (payload.guardian_phone as string) || null,
+        school: (payload.school as string) || null,
+        grade: (payload.grade as string) || null,
+        chief_complaint: (payload.chief_complaint as string) || null,
+        referral_source: (payload.referral_source as string) || null,
+        allied_health_notes: (payload.allied_health_notes as string) || null,
+      }).eq('id', patient.id)
+      if (patErr) throw patErr
+      const { error: draftErr } = await supabase.from('patient_intake_drafts').update({
+        imported_patient_id: patient.id,
+        reviewed_at: new Date().toISOString(),
+      }).eq('id', draftId)
+      if (draftErr) throw draftErr
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.patient(patient.id) })
+      setPendingDrafts((d) => d.filter((x) => x.id !== importDraftId))
+      toast.success('Patient record updated from intake form')
+      setImportDraftId(null)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  function copyLink(link: string) {
+    navigator.clipboard.writeText(link).then(
+      () => toast.success('Link copied'),
+      () => toast.error('Copy failed'),
+    )
+  }
+
+  return (
+    <div className="mt-6">
+      <div className="flex items-center justify-between mb-2">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Intake Form</h3>
+        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => { setGeneratedLink(null); setSendOpen(true) }}>
+          <Link2 className="w-3 h-3 mr-1" /> Send Intake Link
+        </Button>
+      </div>
+
+      {pendingLinks.length > 0 && (
+        <div className="mb-3 space-y-1.5">
+          {pendingLinks.map((l) => {
+            const link = `${window.location.origin}/intake/${l.token}`
+            return (
+              <div key={l.id} className="flex items-center gap-2 p-2 rounded-md border border-border bg-muted/30 text-xs">
+                <span className="text-muted-foreground flex-1 truncate">{link}</span>
+                <span className="text-muted-foreground flex-none">expires {format(parseISO(l.expires_at), 'd MMM')}</span>
+                <Button variant="ghost" size="icon" className="h-5 w-5 flex-none" onClick={() => copyLink(link)}>
+                  <Copy className="w-3 h-3" />
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {pendingDrafts.length > 0 && (
+        <div className="mt-3 space-y-2">
+          <p className="text-xs font-medium text-amber-600 dark:text-amber-400">Pending intake submissions:</p>
+          {pendingDrafts.map((draft) => {
+            const p = draft.payload as Record<string, unknown>
+            return (
+              <div key={draft.id} className="border border-amber-200 dark:border-amber-800 rounded-lg p-3 bg-amber-50 dark:bg-amber-950/20 text-sm">
+                <p className="font-medium text-xs mb-1">Submitted {format(parseISO(draft.submitted_at), 'd MMM yyyy, h:mm a')}</p>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-xs text-muted-foreground mt-2 mb-3">
+                  {!!p.first_name && <span>Name: {String(p.first_name)} {String(p.last_name ?? '')}</span>}
+                  {!!p.chief_complaint && <span>Complaint: {String(p.chief_complaint)}</span>}
+                  {!!p.guardian_name && <span>Guardian: {String(p.guardian_name)}</span>}
+                  {!!p.school && <span>School: {String(p.school)}</span>}
+                </div>
+                <Button
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={() => setImportDraftId(draft.id)}
+                >
+                  <Check className="w-3 h-3 mr-1" /> Import to Patient Record
+                </Button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {pendingLinks.length === 0 && pendingDrafts.length === 0 && (
+        <p className="text-sm text-muted-foreground">No active intake links.</p>
+      )}
+
+      {/* Create link dialog */}
+      <Dialog open={sendOpen} onOpenChange={(o) => { if (!o) { setSendOpen(false); setGeneratedLink(null) } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Send Intake Form</DialogTitle>
+          </DialogHeader>
+          {generatedLink ? (
+            <div className="space-y-3">
+              <p className="text-sm text-muted-foreground">Share this link with the family. It expires in 7 days.</p>
+              <div className="flex items-center gap-2 p-3 rounded-md border border-border bg-muted text-xs font-mono break-all">
+                {generatedLink}
+              </div>
+              <div className="flex gap-2">
+                <Button className="flex-1" onClick={() => copyLink(generatedLink)}>
+                  <Copy className="w-4 h-4 mr-1" /> Copy Link
+                </Button>
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => window.open(`mailto:${encodeURIComponent(email)}?subject=Please complete your intake form&body=Please fill out your intake form here: ${encodeURIComponent(generatedLink)}`, '_blank')}
+                >
+                  <Mail className="w-4 h-4 mr-1" /> Open Mail
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <FormField label="Send to email">
+                <Input
+                  type="email"
+                  placeholder="parent@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </FormField>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setSendOpen(false)}>Cancel</Button>
+                <Button
+                  disabled={createLinkMutation.isPending || !email}
+                  onClick={() => createLinkMutation.mutate(email)}
+                >
+                  Generate Link
+                </Button>
+              </DialogFooter>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Import confirm dialog */}
+      <AlertDialog open={!!importDraftId} onOpenChange={(o) => !o && setImportDraftId(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Import intake data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will overwrite the patient's demographic and clinical fields with the data from the intake form. Existing data will be replaced.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => importDraftId && importMutation.mutate(importDraftId)}>
+              Import
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
   )
 }
 
@@ -1500,7 +2513,7 @@ export function PatientDetailPage() {
 
       {/* Tabs */}
       <Tabs defaultValue="overview">
-        <TabsList className="mb-6">
+        <TabsList className="mb-6 flex-wrap h-auto gap-1">
           <TabsTrigger value="overview" className="gap-1.5">
             <ClipboardList className="w-3.5 h-3.5" /> Overview
           </TabsTrigger>
@@ -1516,6 +2529,9 @@ export function PatientDetailPage() {
           <TabsTrigger value="surveys" className="gap-1.5">
             <BarChart2 className="w-3.5 h-3.5" /> Surveys
           </TabsTrigger>
+          <TabsTrigger value="achievement" className="gap-1.5">
+            <Trophy className="w-3.5 h-3.5" /> Achievement
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview">
@@ -1523,7 +2539,7 @@ export function PatientDetailPage() {
         </TabsContent>
 
         <TabsContent value="appointments">
-          <AppointmentsTab patientId={patient.id} practiceId={practiceId ?? ''} />
+          <AppointmentsTab patientId={patient.id} practiceId={practiceId ?? ''} patient={patient} />
         </TabsContent>
 
         <TabsContent value="vt-program">
@@ -1536,6 +2552,10 @@ export function PatientDetailPage() {
 
         <TabsContent value="surveys">
           <SurveysTab patientId={patient.id} />
+        </TabsContent>
+
+        <TabsContent value="achievement">
+          <AchievementTab patientId={patient.id} />
         </TabsContent>
       </Tabs>
 

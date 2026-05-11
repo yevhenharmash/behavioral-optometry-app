@@ -15,6 +15,7 @@ import {
 import { usePracticeId } from '@/lib/practice'
 import { fetchReferrers, qk, type Referrer } from '@/lib/queries'
 import { supabase } from '@/lib/supabase'
+import { EmptyState } from '@/components/EmptyState'
 
 type ReferrerForm = {
   name: string
@@ -123,10 +124,12 @@ export function ReferrersPage() {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : referrers.length === 0 ? (
-        <div className="text-center py-16">
-          <p className="text-sm text-muted-foreground">No referrers yet.</p>
-          <p className="text-xs text-muted-foreground mt-1">Add referring practitioners to link them to patients and generate referral reports.</p>
-        </div>
+        <EmptyState
+          icon={Plus}
+          title="No referrers yet"
+          description="Add referring practitioners to link them to patients and generate professional referral reports."
+          action={<Button size="sm" onClick={() => { setEditingReferrer(null); reset(EMPTY_FORM); setDialogOpen(true) }}><Plus className="w-4 h-4 mr-1" /> Add Referrer</Button>}
+        />
       ) : (
         <div className="border border-border rounded-lg overflow-hidden max-w-3xl">
           <table className="w-full text-sm">

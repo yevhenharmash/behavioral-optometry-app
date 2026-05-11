@@ -16,11 +16,16 @@ export type ActivityAssignmentWithActivity = ActivityAssignment & { activities: 
 export type SurveyResponse = Database['public']['Tables']['survey_responses']['Row']
 export type Referrer = Database['public']['Tables']['referrers']['Row']
 export type Practice = Database['public']['Tables']['practices']['Row']
+export type AchievementEntry = Database['public']['Tables']['achievement_entries']['Row']
+export type IntakeLink = Database['public']['Tables']['intake_links']['Row']
+export type PatientIntakeDraft = Database['public']['Tables']['patient_intake_drafts']['Row']
 
 export const qk = {
   activities: (practiceId: string) => ['activities', practiceId] as const,
   sessionActivities: (therapySessionId: string) => ['session-activities', therapySessionId] as const,
   surveyResponses: (patientId: string) => ['survey-responses', patientId] as const,
+  achievementEntries: (patientId: string) => ['achievement-entries', patientId] as const,
+  intakeLinks: (patientId: string) => ['intake-links', patientId] as const,
   referrers: (practiceId: string) => ['referrers', practiceId] as const,
   patientReferrers: (patientId: string) => ['patient-referrers', patientId] as const,
   practice: (practiceId: string) => ['practice', practiceId] as const,
@@ -195,8 +200,47 @@ export async function fetchPractice(practiceId: string): Promise<Practice> {
   return data
 }
 
+export async function fetchAchievementEntries(patientId: string): Promise<AchievementEntry[]> {
+  const { data, error } = await supabase
+    .from('achievement_entries')
+    .select('*')
+    .eq('patient_id', patientId)
+    .order('captured_at')
+  if (error) throw error
+  return data
+}
+
+export async function fetchIntakeLinks(patientId: string): Promise<IntakeLink[]> {
+  const { data, error } = await supabase
+    .from('intake_links')
+    .select('*')
+    .eq('patient_id', patientId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return data
+}
+
+export async function fetchIntakeDraftByToken(token: string): Promise<{
+  link: IntakeLink
+  draft: PatientIntakeDraft | null
+} | null> {
+  const { data: link, error } = await supabase
+    .from('intake_links')
+    .select('*')
+    .eq('token', token)
+    .maybeSingle()
+  if (error) throw error
+  if (!link) return null
+  const { data: draft } = await supabase
+    .from('patient_intake_drafts')
+    .select('*')
+    .eq('intake_link_id', link.id)
+    .maybeSingle()
+  return { link, draft: draft ?? null }
+}
+
 export async function fetchTodayStats(practiceId: string, todayStart: string, todayEnd: string) {
-  const [{ count: apptCount }, { count: vtCount }] = await Promise.all([
+  const [{ count: apptCount }, { count: vtCount }, { count: draftCount }] = await Promise.all([
     supabase
       .from('appointments')
       .select('*', { count: 'exact', head: true })
@@ -208,6 +252,14 @@ export async function fetchTodayStats(practiceId: string, todayStart: string, to
       .from('vt_programs')
       .select('*', { count: 'exact', head: true })
       .is('ended_at', null),
+    supabase
+      .from('patient_intake_drafts')
+      .select('*', { count: 'exact', head: true })
+      .is('reviewed_at', null),
   ])
-  return { apptCount: apptCount ?? 0, vtCount: vtCount ?? 0 }
+  return {
+    apptCount: apptCount ?? 0,
+    vtCount: vtCount ?? 0,
+    draftCount: draftCount ?? 0,
+  }
 }

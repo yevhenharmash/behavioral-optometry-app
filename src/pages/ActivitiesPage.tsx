@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm, Controller } from 'react-hook-form'
-import { Plus, Pencil, ChevronDown, ChevronRight } from 'lucide-react'
+import { Plus, Pencil, ChevronDown, ChevronRight, BookOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -15,6 +15,7 @@ import { usePracticeId } from '@/lib/practice'
 import { fetchActivities, qk, type Activity } from '@/lib/queries'
 import { seedActivitiesIfEmpty } from '@/lib/activities-seed'
 import { supabase } from '@/lib/supabase'
+import { EmptyState } from '@/components/EmptyState'
 
 const CATEGORY_LABELS: Record<string, string> = {
   vergence: 'Vergence',
@@ -172,7 +173,11 @@ export function ActivitiesPage() {
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : activities.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No activities yet.</p>
+        <EmptyState
+          icon={BookOpen}
+          title="No activities in the library"
+          description="The activity library will be seeded on first load. Refresh the page or add a custom activity."
+        />
       ) : (
         <div className="space-y-6 max-w-3xl">
           {categoryOrder.map((cat) => {

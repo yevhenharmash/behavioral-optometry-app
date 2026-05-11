@@ -11,6 +11,7 @@ import { CalendarPage } from '@/pages/CalendarPage'
 import { ActivitiesPage } from '@/pages/ActivitiesPage'
 import { ReferrersPage } from '@/pages/ReferrersPage'
 import { SettingsPage } from '@/pages/SettingsPage'
+import { IntakePage } from '@/pages/IntakePage'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -53,6 +54,7 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+            <Route path="/intake/:token" element={<IntakePage />} />
             <Route path="/*" element={<ProtectedRoutes />} />
           </Routes>
         </AuthProvider>
