@@ -6,6 +6,7 @@ import { Layout } from '@/components/Layout'
 import { LoginPage } from '@/pages/LoginPage'
 import { TodayPage } from '@/pages/TodayPage'
 import { PatientsPage } from '@/pages/PatientsPage'
+import { PatientDetailPage } from '@/pages/PatientDetailPage'
 import { CalendarPage } from '@/pages/CalendarPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 
@@ -26,6 +27,7 @@ function ProtectedRoutes() {
       <Route element={<Layout />}>
         <Route index element={<TodayPage />} />
         <Route path="patients" element={<PatientsPage />} />
+        <Route path="patients/:id" element={<PatientDetailPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>

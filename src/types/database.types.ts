@@ -1,7 +1,5 @@
 // Auto-generate this file with:
 //   npx supabase gen types typescript --project-id <your-project-id> > src/types/database.types.ts
-//
-// This stub satisfies the TypeScript compiler until the real types are generated.
 
 export type Json =
   | string
@@ -24,8 +22,17 @@ export type Database = {
           email: string | null
           created_at: string
         }
-        Insert: Omit<Database['public']['Tables']['practices']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string }
+        Insert: {
+          id?: string
+          name: string
+          owner_id?: string | null
+          address?: string | null
+          phone?: string | null
+          email?: string | null
+          created_at?: string
+        }
         Update: Partial<Database['public']['Tables']['practices']['Insert']>
+        Relationships: []
       }
       profiles: {
         Row: {
@@ -38,6 +45,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['profiles']['Row'], 'created_at'> & { created_at?: string }
         Update: Partial<Database['public']['Tables']['profiles']['Insert']>
+        Relationships: []
       }
       patients: {
         Row: {
@@ -63,6 +71,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['patients']['Row'], 'id' | 'created_at' | 'updated_at' | 'is_archived'> & { id?: string; created_at?: string; updated_at?: string; is_archived?: boolean }
         Update: Partial<Database['public']['Tables']['patients']['Insert']>
+        Relationships: []
       }
       referrers: {
         Row: {
@@ -77,11 +86,13 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['referrers']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string }
         Update: Partial<Database['public']['Tables']['referrers']['Insert']>
+        Relationships: []
       }
       patient_referrers: {
         Row: { patient_id: string; referrer_id: string }
         Insert: Database['public']['Tables']['patient_referrers']['Row']
         Update: Partial<Database['public']['Tables']['patient_referrers']['Row']>
+        Relationships: []
       }
       rxs: {
         Row: {
@@ -95,6 +106,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['rxs']['Row'], 'id' | 'captured_at'> & { id?: string; captured_at?: string }
         Update: Partial<Database['public']['Tables']['rxs']['Insert']>
+        Relationships: []
       }
       appointments: {
         Row: {
@@ -111,8 +123,22 @@ export type Database = {
           created_at: string
           updated_at: string
         }
-        Insert: Omit<Database['public']['Tables']['appointments']['Row'], 'id' | 'created_at' | 'updated_at'> & { id?: string; created_at?: string; updated_at?: string }
+        Insert: {
+          id?: string
+          practice_id: string
+          patient_id: string
+          starts_at: string
+          duration_min?: number
+          type: 'initial_eval' | 'therapy_session' | 'progress_check' | 'consultation' | 'follow_up'
+          status?: 'scheduled' | 'in_progress' | 'completed' | 'no_show' | 'cancelled'
+          summary_email_body?: string | null
+          summary_referrer_body?: string | null
+          summary_email_sent_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
         Update: Partial<Database['public']['Tables']['appointments']['Insert']>
+        Relationships: []
       }
       exam_notes: {
         Row: {
@@ -125,6 +151,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['exam_notes']['Row'], 'id' | 'updated_at'> & { id?: string; updated_at?: string }
         Update: Partial<Database['public']['Tables']['exam_notes']['Insert']>
+        Relationships: []
       }
       activities: {
         Row: {
@@ -143,6 +170,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['activities']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string }
         Update: Partial<Database['public']['Tables']['activities']['Insert']>
+        Relationships: []
       }
       therapy_sessions: {
         Row: {
@@ -154,6 +182,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['therapy_sessions']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string }
         Update: Partial<Database['public']['Tables']['therapy_sessions']['Insert']>
+        Relationships: []
       }
       activity_assignments: {
         Row: {
@@ -170,6 +199,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['activity_assignments']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string }
         Update: Partial<Database['public']['Tables']['activity_assignments']['Insert']>
+        Relationships: []
       }
       program_templates: {
         Row: {
@@ -184,6 +214,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['program_templates']['Row'], 'id' | 'created_at'> & { id?: string; created_at?: string }
         Update: Partial<Database['public']['Tables']['program_templates']['Insert']>
+        Relationships: []
       }
       vt_programs: {
         Row: {
@@ -198,6 +229,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['vt_programs']['Row'], 'id' | 'created_at' | 'started_at'> & { id?: string; created_at?: string; started_at?: string }
         Update: Partial<Database['public']['Tables']['vt_programs']['Insert']>
+        Relationships: []
       }
       surveys: {
         Row: {
@@ -209,6 +241,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['surveys']['Row'], 'id'> & { id?: string }
         Update: Partial<Database['public']['Tables']['surveys']['Insert']>
+        Relationships: []
       }
       survey_responses: {
         Row: {
@@ -222,6 +255,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['survey_responses']['Row'], 'id' | 'captured_at'> & { id?: string; captured_at?: string }
         Update: Partial<Database['public']['Tables']['survey_responses']['Insert']>
+        Relationships: []
       }
       achievement_entries: {
         Row: {
@@ -235,6 +269,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['achievement_entries']['Row'], 'id' | 'captured_at'> & { id?: string; captured_at?: string }
         Update: Partial<Database['public']['Tables']['achievement_entries']['Insert']>
+        Relationships: []
       }
       attachments: {
         Row: {
@@ -250,6 +285,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['attachments']['Row'], 'id' | 'uploaded_at'> & { id?: string; uploaded_at?: string }
         Update: Partial<Database['public']['Tables']['attachments']['Insert']>
+        Relationships: []
       }
       intake_links: {
         Row: {
@@ -264,6 +300,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['intake_links']['Row'], 'id' | 'token' | 'created_at'> & { id?: string; token?: string; created_at?: string }
         Update: Partial<Database['public']['Tables']['intake_links']['Insert']>
+        Relationships: []
       }
       patient_intake_drafts: {
         Row: {
@@ -276,6 +313,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['patient_intake_drafts']['Row'], 'id' | 'submitted_at'> & { id?: string; submitted_at?: string }
         Update: Partial<Database['public']['Tables']['patient_intake_drafts']['Insert']>
+        Relationships: []
       }
       audit_log: {
         Row: {
@@ -289,6 +327,7 @@ export type Database = {
         }
         Insert: Omit<Database['public']['Tables']['audit_log']['Row'], 'id' | 'at'> & { id?: string; at?: string }
         Update: Partial<Database['public']['Tables']['audit_log']['Insert']>
+        Relationships: []
       }
     }
     Views: Record<string, never>
