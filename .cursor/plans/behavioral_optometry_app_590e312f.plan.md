@@ -118,6 +118,7 @@ activity_assignments(id, therapy_session_id, activity_id,
                      widget_run_id uuid nullable) -- link to in-office widget result if any
 
 therapy_sessions(id, appointment_id,
+                 vt_program_id uuid nullable → vt_programs,  -- which program this session belongs to; needed for carry-over query
                  in_office_observations text,
                  -- activities now live in activity_assignments
                  created_at)
@@ -247,8 +248,8 @@ flowchart LR
 - `src/lib/supabase.ts`, `src/lib/auth.tsx` — verbatim from LangTutor
 - `src/lib/queries/` — split by domain: `patients.ts`, `appointments.ts`, `notes.ts`, `activities.ts`, `surveys.ts`, `programs.ts`, `intake.ts`
 - `src/lib/templates/` — exam template JSON + a `<TemplateForm template={…} value={…} onChange={…}/>` renderer (the one piece of real engineering)
-- `src/lib/surveys/` — survey JSON (`ciss.json`, `covd_qol.json`) + `SurveyForm` + scoring
-- `src/lib/program-templates/` — diagnosis-driven program JSON (`convergence_insufficiency.json`, …) + clone-into-vt_program function
+- `src/lib/surveys/` — survey JSON (`ciss.json`, `covd_qol.json`) + `SurveyForm` + scoring; `supabase/seed.sql` inserts these into the `surveys` table at startup so the DB is the runtime source of truth (JSON files are the edit surface, DB is what the app queries)
+- `src/lib/program-templates/` — diagnosis-driven program JSON (`convergence_insufficiency.json`, …) + clone-into-vt_program function; same pattern: JSON files are git-versioned source, `seed.sql` populates `program_templates`, app queries the DB table
 - `src/lib/email/summary.ts` — pure function `(patient, appointment, notes, tone:'parent'|'referrer') => string`
 - `src/components/widgets/` — Sanet-lite activity widgets: `Metronome.tsx`, `Tachistoscope.tsx`, `SaccadeDots.tsx`, `Pursuits.tsx`, `HartChart.tsx`, `ReactionTime.tsx` (each fullscreen-able, all share a `useWidgetRun()` hook that emits an `activity_assignments` row)
 - `src/components/SessionTimer.tsx` — top-of-screen countdown + N-min ping
