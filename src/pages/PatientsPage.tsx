@@ -136,6 +136,7 @@ export function PatientsPage() {
     },
     onSuccess: (patientId) => {
       queryClient.invalidateQueries({ queryKey: qk.patients(practiceId!) })
+      queryClient.invalidateQueries({ queryKey: qk.archivedPatients(practiceId!) })
       toast.success('Patient archived')
       if (practiceId && user) {
         writeAudit(practiceId, user.id, 'archive_patient', 'patients', patientId)

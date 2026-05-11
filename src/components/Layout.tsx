@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Calendar, Users, Dumbbell, UserCheck, Settings, LogOut, Eye, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Calendar, Users, Dumbbell, UserCheck, Settings, LogOut, Eye, Menu, X, Sun, Moon } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
+import { useTheme } from '@/lib/theme'
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Today', end: true },
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
 
 export function Layout() {
   const { user, signOut } = useAuth()
+  const { theme, setTheme } = useTheme()
   const navigate = useNavigate()
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
 
@@ -78,6 +80,13 @@ export function Layout() {
         </nav>
 
         <div className="p-4 border-t border-border space-y-2">
+          <button
+            onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+            className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+            {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+          </button>
           {user && (
             <p className="text-xs text-muted-foreground truncate">{user.email}</p>
           )}

@@ -155,7 +155,7 @@ function ArchivedPatientsSection({ practiceId }: { practiceId: string }) {
   const queryClient = useQueryClient()
 
   const { data: archived = [], isLoading } = useQuery({
-    queryKey: ['archived-patients', practiceId],
+    queryKey: qk.archivedPatients(practiceId),
     queryFn: async () => {
       const { data, error } = await supabase
         .from('patients')
@@ -174,8 +174,8 @@ function ArchivedPatientsSection({ practiceId }: { practiceId: string }) {
       if (error) throw error
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['archived-patients', practiceId] })
-      queryClient.invalidateQueries({ queryKey: ['patients', practiceId] })
+      queryClient.invalidateQueries({ queryKey: qk.archivedPatients(practiceId) })
+      queryClient.invalidateQueries({ queryKey: qk.patients(practiceId) })
       toast.success('Patient restored')
     },
     onError: (e: Error) => toast.error(e.message),
@@ -217,6 +217,7 @@ function ArchivedPatientsSection({ practiceId }: { practiceId: string }) {
     </div>
   )
 }
+
 
 export function SettingsPage() {
   const { data: practiceId } = usePracticeId()

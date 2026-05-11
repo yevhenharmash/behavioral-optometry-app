@@ -30,6 +30,7 @@ export const qk = {
   patientReferrers: (patientId: string) => ['patient-referrers', patientId] as const,
   practice: (practiceId: string) => ['practice', practiceId] as const,
   patients: (practiceId: string) => ['patients', practiceId] as const,
+  archivedPatients: (practiceId: string) => ['archived-patients', practiceId] as const,
   patient: (id: string) => ['patient', id] as const,
   patientAppointments: (patientId: string) => ['patient-appointments', patientId] as const,
   vtProgram: (patientId: string) => ['vt-program', patientId] as const,
