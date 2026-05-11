@@ -4,8 +4,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm, Controller } from 'react-hook-form'
 import { format, parseISO, differenceInWeeks, differenceInYears } from 'date-fns'
 import {
-  ArrowLeft, Pencil, Calendar, Activity, FlaskConical, ClipboardList,
-  Plus, Clock, Check, X,
+  ArrowLeft, Pencil, Calendar, Activity as ActivityIcon, FlaskConical, ClipboardList,
+  Plus, Clock, Check, X, Trash2, BarChart2, Star,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -23,8 +23,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import {
   fetchPatient, fetchPatientAppointments, fetchVtPrograms,
-  fetchRxs, fetchApptNotes, qk,
-  type Patient, type AppointmentWithPatient,
+  fetchRxs, fetchApptNotes, fetchActivities, fetchSessionActivities, fetchSurveyResponses, qk,
+  type Patient, type AppointmentWithPatient, type Activity,
 } from '@/lib/queries'
 import { supabase } from '@/lib/supabase'
 import { usePracticeId } from '@/lib/practice'
@@ -147,14 +147,242 @@ type NotesForm = {
   in_office_observations: string
 }
 
+type ActivityLogForm = {
+  activity_id: string
+  level_label: string
+  duration_min: string
+  performance: string
+  observations: string
+}
+
+const EMPTY_ACTIVITY_LOG: ActivityLogForm = {
+  activity_id: '', level_label: '', duration_min: '', performance: '', observations: '',
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  vergence: 'Vergence', accommodation: 'Accommodation', tracking: 'Tracking',
+  saccades: 'Saccades', stereopsis: 'Stereopsis', visual_motor: 'Visual Motor',
+  visual_processing: 'Visual Processing',
+}
+
+async function getOrCreateTherapySession(apptId: string): Promise<string> {
+  const { data: existing } = await supabase
+    .from('therapy_sessions')
+    .select('id')
+    .eq('appointment_id', apptId)
+    .maybeSingle()
+  if (existing) return existing.id
+  const { data: created, error } = await supabase
+    .from('therapy_sessions')
+    .insert({ appointment_id: apptId, vt_program_id: null, in_office_observations: null })
+    .select('id')
+    .single()
+  if (error) throw error
+  return created.id
+}
+
+function ActivityLogSection({
+  apptId,
+  practiceId,
+  therapySessionId,
+}: {
+  apptId: string
+  practiceId: string
+  therapySessionId: string | null
+}) {
+  const queryClient = useQueryClient()
+  const [addOpen, setAddOpen] = useState(false)
+  const { register, handleSubmit, reset, watch, setValue } = useForm<ActivityLogForm>({
+    defaultValues: EMPTY_ACTIVITY_LOG,
+  })
+
+  const { data: allActivities = [] } = useQuery({
+    queryKey: qk.activities(practiceId),
+    enabled: !!practiceId,
+    queryFn: () => fetchActivities(practiceId),
+  })
+
+  const { data: sessionActivities = [], refetch: refetchSessionActivities } = useQuery({
+    queryKey: qk.sessionActivities(therapySessionId ?? ''),
+    enabled: !!therapySessionId,
+    queryFn: () => fetchSessionActivities(therapySessionId!),
+  })
+
+  const watchedActivityId = watch('activity_id')
+  const selectedActivity = allActivities.find((a) => a.id === watchedActivityId)
+  const levels = Array.isArray(selectedActivity?.levels)
+    ? (selectedActivity.levels as { label: string; description: string }[])
+    : []
+
+  const addMutation = useMutation({
+    mutationFn: async (values: ActivityLogForm) => {
+      const tsId = therapySessionId ?? (await getOrCreateTherapySession(apptId))
+      const { error } = await supabase.from('activity_assignments').insert({
+        therapy_session_id: tsId,
+        activity_id: values.activity_id,
+        mode: 'in_office',
+        level_label: toNullable(values.level_label),
+        duration_min: values.duration_min ? Number(values.duration_min) : null,
+        performance: values.performance ? Number(values.performance) : null,
+        observations: toNullable(values.observations),
+        widget_run_id: null,
+      })
+      if (error) throw error
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.apptNotes(apptId) })
+      refetchSessionActivities()
+      toast.success('Activity logged')
+      setAddOpen(false)
+      reset(EMPTY_ACTIVITY_LOG)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const removeMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from('activity_assignments').delete().eq('id', id)
+      if (error) throw error
+    },
+    onSuccess: () => {
+      refetchSessionActivities()
+      toast.success('Activity removed')
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // Group activities by category for the select
+  const grouped = allActivities.reduce<Record<string, Activity[]>>((acc, a) => {
+    ;(acc[a.category] ??= []).push(a)
+    return acc
+  }, {})
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Activities</p>
+        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setAddOpen(true)}>
+          <Plus className="w-3 h-3 mr-1" /> Log Activity
+        </Button>
+      </div>
+
+      {sessionActivities.length === 0 ? (
+        <p className="text-xs text-muted-foreground italic">No activities logged yet.</p>
+      ) : (
+        <ul className="space-y-1.5">
+          {sessionActivities.map((sa) => (
+            <li key={sa.id} className="flex items-start gap-2 rounded-md border border-border p-2 text-sm">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium truncate">{sa.activities.name}</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5 text-xs text-muted-foreground">
+                  {sa.level_label && <span>Level: {sa.level_label}</span>}
+                  {sa.duration_min && <span>{sa.duration_min} min</span>}
+                  {sa.performance != null && (
+                    <span className="flex items-center gap-0.5">
+                      {Array.from({ length: 5 }).map((_, i) => (
+                        <Star
+                          key={i}
+                          className={`w-2.5 h-2.5 ${i < (sa.performance ?? 0) ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground/30'}`}
+                        />
+                      ))}
+                    </span>
+                  )}
+                </div>
+                {sa.observations && <p className="text-xs text-muted-foreground mt-0.5">{sa.observations}</p>}
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 flex-none text-muted-foreground hover:text-destructive"
+                onClick={() => removeMutation.mutate(sa.id)}
+              >
+                <Trash2 className="w-3 h-3" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Log Activity</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleSubmit((v) => addMutation.mutate(v))} className="space-y-3">
+            <FormField label="Activity *">
+              <Select
+                value={watchedActivityId}
+                onValueChange={(v) => { setValue('activity_id', v); setValue('level_label', '') }}
+              >
+                <SelectTrigger><SelectValue placeholder="Select activity…" /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(CATEGORY_LABELS).map(([cat, catLabel]) => {
+                    const group = grouped[cat]
+                    if (!group?.length) return null
+                    return (
+                      <div key={cat}>
+                        <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{catLabel}</p>
+                        {group.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                        ))}
+                      </div>
+                    )
+                  })}
+                </SelectContent>
+              </Select>
+            </FormField>
+
+            {levels.length > 0 ? (
+              <FormField label="Level">
+                <Select value={watch('level_label')} onValueChange={(v) => setValue('level_label', v)}>
+                  <SelectTrigger><SelectValue placeholder="Select level…" /></SelectTrigger>
+                  <SelectContent>
+                    {levels.map((l) => (
+                      <SelectItem key={l.label} value={l.label}>{l.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormField>
+            ) : (
+              <FormField label="Level">
+                <Input placeholder="e.g. Level 2" {...register('level_label')} />
+              </FormField>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Duration (min)">
+                <Input type="number" min="1" placeholder="30" {...register('duration_min')} />
+              </FormField>
+              <FormField label="Performance (1–5)">
+                <Input type="number" min="1" max="5" placeholder="4" {...register('performance')} />
+              </FormField>
+            </div>
+
+            <FormField label="Observations">
+              <Textarea rows={2} placeholder="Patient response, notes…" {...register('observations')} />
+            </FormField>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => { setAddOpen(false); reset(EMPTY_ACTIVITY_LOG) }}>Cancel</Button>
+              <Button type="submit" disabled={addMutation.isPending || !watchedActivityId}>Log</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
 function ApptNotesDialog({
   appt,
   open,
   onClose,
+  practiceId,
 }: {
   appt: AppointmentWithPatient
   open: boolean
   onClose: () => void
+  practiceId: string
 }) {
   const queryClient = useQueryClient()
 
@@ -239,47 +467,59 @@ function ApptNotesDialog({
         {isLoading ? (
           <p className="text-sm text-muted-foreground py-4">Loading…</p>
         ) : (
-          <form onSubmit={handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4">
-            <FormField label="Status">
-              <Controller
-                name="status"
-                control={control}
-                render={({ field }) => (
-                  <Select value={field.value} onValueChange={field.onChange}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {Object.entries(STATUS_LABELS).map(([v, l]) => (
-                        <SelectItem key={v} value={v}>{l}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                )}
-              />
-            </FormField>
-
-            <FormField label="Notes">
-              <Textarea
-                rows={5}
-                placeholder="Exam findings, observations, plan…"
-                {...register('free_text')}
-              />
-            </FormField>
-
-            {appt.type === 'therapy_session' && (
-              <FormField label="In-office Observations">
-                <Textarea
-                  rows={3}
-                  placeholder="Activities completed, patient response…"
-                  {...register('in_office_observations')}
+          <ScrollArea className="max-h-[70vh]">
+            <form onSubmit={handleSubmit((v) => saveMutation.mutate(v))} className="space-y-4 pr-1">
+              <FormField label="Status">
+                <Controller
+                  name="status"
+                  control={control}
+                  render={({ field }) => (
+                    <Select value={field.value} onValueChange={field.onChange}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(STATUS_LABELS).map(([v, l]) => (
+                          <SelectItem key={v} value={v}>{l}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                 />
               </FormField>
-            )}
 
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
-              <Button type="submit" disabled={saveMutation.isPending}>Save Notes</Button>
-            </DialogFooter>
-          </form>
+              <FormField label="Notes">
+                <Textarea
+                  rows={4}
+                  placeholder="Exam findings, observations, plan…"
+                  {...register('free_text')}
+                />
+              </FormField>
+
+              {appt.type === 'therapy_session' && (
+                <>
+                  <FormField label="In-office Observations">
+                    <Textarea
+                      rows={2}
+                      placeholder="General session observations…"
+                      {...register('in_office_observations')}
+                    />
+                  </FormField>
+
+                  <div className="border-t border-border pt-4">
+                    <ActivityLogSection
+                      apptId={appt.id}
+                      practiceId={practiceId}
+                      therapySessionId={notes?.therapySession?.id ?? null}
+                    />
+                  </div>
+                </>
+              )}
+
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
+                <Button type="submit" disabled={saveMutation.isPending}>Save Notes</Button>
+              </DialogFooter>
+            </form>
+          </ScrollArea>
         )}
       </DialogContent>
     </Dialog>
@@ -383,6 +623,7 @@ function AppointmentsTab({ patientId, practiceId }: { patientId: string; practic
           appt={notesAppt}
           open={!!notesAppt}
           onClose={() => setNotesAppt(null)}
+          practiceId={practiceId}
         />
       )}
 
@@ -891,6 +1132,174 @@ function EditPatientDialog({
   )
 }
 
+// ─── CISS Survey ──────────────────────────────────────────────────────────────
+const CISS_ITEMS = [
+  'Do your eyes feel tired when reading or doing close work?',
+  'Do your eyes feel uncomfortable when reading or doing close work?',
+  'Do you have headaches when reading or doing close work?',
+  'Do you feel sleepy when reading or doing close work?',
+  'Do you lose concentration when reading or doing close work?',
+  'Do you have trouble remembering what you have read?',
+  'Do you have double vision when reading or doing close work?',
+  'Do you see the words move, jump, swim or appear to float on the page?',
+  'Do you feel like you read slowly?',
+  'Do your eyes ever hurt when reading or doing close work?',
+  'Do your eyes ever feel sore when reading or doing close work?',
+  'Do you feel a "pulling" feeling around your eyes when reading or doing close work?',
+  'Do you notice the words blurring or coming in and out of focus when reading or doing close work?',
+  'Do you lose your place while reading or doing close work?',
+  'Do you have to re-read the same line of words when reading?',
+]
+
+const CISS_OPTIONS = ['Never', 'Infrequently', 'Sometimes', 'Fairly often', 'Always']
+
+type CissForm = Record<string, string>
+
+function CissDialog({ patientId, open, onClose }: { patientId: string; open: boolean; onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const defaultValues = Object.fromEntries(CISS_ITEMS.map((_, i) => [`q${i + 1}`, '0']))
+  const { register, handleSubmit, watch, reset } = useForm<CissForm>({ defaultValues })
+  const values = watch()
+  const currentScore = CISS_ITEMS.reduce((sum, _, i) => sum + Number(values[`q${i + 1}`] ?? 0), 0)
+
+  const saveMutation = useMutation({
+    mutationFn: async (data: CissForm) => {
+      const answers = Object.fromEntries(
+        Object.entries(data).map(([k, v]) => [k, Number(v)])
+      )
+      const score = Object.values(answers).reduce((s, v) => s + v, 0)
+      const { error } = await supabase.from('survey_responses').insert({
+        patient_id: patientId,
+        survey_key: 'ciss',
+        answers,
+        score,
+        score_label: score >= 16 ? 'Symptomatic' : 'Asymptomatic',
+      })
+      if (error) throw error
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.surveyResponses(patientId) })
+      toast.success('CISS survey saved')
+      reset(defaultValues)
+      onClose()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>CISS — Convergence Insufficiency Symptom Survey</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit((v) => saveMutation.mutate(v))}>
+          <ScrollArea className="h-[65vh] pr-4">
+            <div className="space-y-4 pb-4">
+              <p className="text-xs text-muted-foreground">
+                Rate each symptom from 0 (Never) to 4 (Always). Score ≥ 16 is clinically significant.
+              </p>
+              {CISS_ITEMS.map((item, i) => (
+                <div key={i} className="space-y-1.5">
+                  <p className="text-sm">{i + 1}. {item}</p>
+                  <div className="flex gap-2 flex-wrap">
+                    {CISS_OPTIONS.map((label, score) => (
+                      <label key={score} className="flex items-center gap-1.5 cursor-pointer">
+                        <input
+                          type="radio"
+                          value={score}
+                          {...register(`q${i + 1}`)}
+                          className="accent-primary"
+                        />
+                        <span className="text-xs text-muted-foreground">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
+          <div className="flex items-center justify-between mt-4 pt-4 border-t border-border">
+            <div>
+              <span className="text-sm font-medium">Score: {currentScore} / 60</span>
+              <span className={`ml-2 text-xs font-medium px-2 py-0.5 rounded ${currentScore >= 16 ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300' : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'}`}>
+                {currentScore >= 16 ? 'Symptomatic' : 'Asymptomatic'}
+              </span>
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+              <Button type="submit" disabled={saveMutation.isPending}>Save Survey</Button>
+            </DialogFooter>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function SurveysTab({ patientId }: { patientId: string }) {
+  const [cissOpen, setCissOpen] = useState(false)
+
+  const { data: responses = [], isLoading } = useQuery({
+    queryKey: qk.surveyResponses(patientId),
+    queryFn: () => fetchSurveyResponses(patientId),
+  })
+
+  const cissResponses = responses.filter((r) => r.survey_key === 'ciss')
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-sm font-medium">CISS — Convergence Insufficiency Symptom Survey</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">15 items · Score ≥ 16 = symptomatic</p>
+        </div>
+        <Button size="sm" onClick={() => setCissOpen(true)}>
+          <Plus className="w-4 h-4 mr-1" /> Take Survey
+        </Button>
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : cissResponses.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No surveys recorded yet.</p>
+      ) : (
+        <div className="border border-border rounded-lg overflow-hidden max-w-lg">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Date</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Score</th>
+                <th className="text-left px-4 py-3 font-medium text-muted-foreground">Result</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cissResponses.map((r) => (
+                <tr key={r.id} className="border-b border-border last:border-0">
+                  <td className="px-4 py-3 text-muted-foreground">
+                    {format(parseISO(r.captured_at), 'd MMM yyyy')}
+                  </td>
+                  <td className="px-4 py-3 font-medium">{r.score} / 60</td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-block text-xs px-2 py-0.5 rounded font-medium ${
+                      r.score_label === 'Symptomatic'
+                        ? 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300'
+                        : 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300'
+                    }`}>
+                      {r.score_label}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <CissDialog patientId={patientId} open={cissOpen} onClose={() => setCissOpen(false)} />
+    </div>
+  )
+}
+
 function EditSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
@@ -965,10 +1374,13 @@ export function PatientDetailPage() {
             <Calendar className="w-3.5 h-3.5" /> Appointments
           </TabsTrigger>
           <TabsTrigger value="vt-program" className="gap-1.5">
-            <Activity className="w-3.5 h-3.5" /> VT Program
+            <ActivityIcon className="w-3.5 h-3.5" /> VT Program
           </TabsTrigger>
           <TabsTrigger value="rx" className="gap-1.5">
             <FlaskConical className="w-3.5 h-3.5" /> Rx
+          </TabsTrigger>
+          <TabsTrigger value="surveys" className="gap-1.5">
+            <BarChart2 className="w-3.5 h-3.5" /> Surveys
           </TabsTrigger>
         </TabsList>
 
@@ -986,6 +1398,10 @@ export function PatientDetailPage() {
 
         <TabsContent value="rx">
           <RxTab patientId={patient.id} />
+        </TabsContent>
+
+        <TabsContent value="surveys">
+          <SurveysTab patientId={patient.id} />
         </TabsContent>
       </Tabs>
 

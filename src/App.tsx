@@ -8,6 +8,7 @@ import { TodayPage } from '@/pages/TodayPage'
 import { PatientsPage } from '@/pages/PatientsPage'
 import { PatientDetailPage } from '@/pages/PatientDetailPage'
 import { CalendarPage } from '@/pages/CalendarPage'
+import { ActivitiesPage } from '@/pages/ActivitiesPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 
 const queryClient = new QueryClient({
@@ -29,6 +30,7 @@ function ProtectedRoutes() {
         <Route path="patients" element={<PatientsPage />} />
         <Route path="patients/:id" element={<PatientDetailPage />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="activities" element={<ActivitiesPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

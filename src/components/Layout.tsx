@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
-import { LayoutDashboard, Calendar, Users, Settings, LogOut, Eye, Menu, X } from 'lucide-react'
+import { LayoutDashboard, Calendar, Users, Dumbbell, Settings, LogOut, Eye, Menu, X } from 'lucide-react'
 import { useAuth } from '@/lib/auth'
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Today', end: true },
   { to: '/calendar', icon: Calendar, label: 'Calendar', end: false },
   { to: '/patients', icon: Users, label: 'Patients', end: false },
+  { to: '/activities', icon: Dumbbell, label: 'Activities', end: false },
   { to: '/settings', icon: Settings, label: 'Settings', end: false },
 ]
 
