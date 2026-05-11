@@ -288,8 +288,54 @@ export function PatientsPage() {
 
                 <Section title="Clinical">
                   <div className="space-y-4">
-                    <Field label="Chief Complaint"><Input {...register('chief_complaint')} /></Field>
-                    <Field label="Referral Source"><Input {...register('referral_source')} /></Field>
+                    <Field label="Chief Complaint">
+                      <Controller
+                        name="chief_complaint"
+                        control={control}
+                        render={({ field }) => (
+                          <Select value={field.value} onValueChange={field.onChange}>
+                            <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="reading_difficulties">Reading difficulties</SelectItem>
+                              <SelectItem value="headaches">Headaches / eye strain</SelectItem>
+                              <SelectItem value="double_vision">Double vision</SelectItem>
+                              <SelectItem value="convergence_insufficiency">Convergence insufficiency</SelectItem>
+                              <SelectItem value="crossed_eyes">Crossed eyes (strabismus)</SelectItem>
+                              <SelectItem value="lazy_eye">Lazy eye (amblyopia)</SelectItem>
+                              <SelectItem value="learning_difficulties">Learning difficulties</SelectItem>
+                              <SelectItem value="tracking_problems">Tracking problems</SelectItem>
+                              <SelectItem value="sports_performance">Sports performance</SelectItem>
+                              <SelectItem value="post_concussion">Post-concussion vision</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </Field>
+                    <Field label="Referral Source">
+                      <Controller
+                        name="referral_source"
+                        control={control}
+                        render={({ field }) => (
+                          <Select value={field.value} onValueChange={field.onChange}>
+                            <SelectTrigger><SelectValue placeholder="Select…" /></SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="self">Self / family</SelectItem>
+                              <SelectItem value="gp">GP / family doctor</SelectItem>
+                              <SelectItem value="optometrist">Optometrist</SelectItem>
+                              <SelectItem value="pediatrician">Pediatrician</SelectItem>
+                              <SelectItem value="teacher_school">Teacher / school</SelectItem>
+                              <SelectItem value="ot">Occupational therapist</SelectItem>
+                              <SelectItem value="psychologist">Psychologist</SelectItem>
+                              <SelectItem value="neurologist">Neurologist</SelectItem>
+                              <SelectItem value="word_of_mouth">Word of mouth</SelectItem>
+                              <SelectItem value="online">Online / website</SelectItem>
+                              <SelectItem value="other">Other</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        )}
+                      />
+                    </Field>
                     <Field label="Allied Health Notes">
                       <Textarea rows={3} {...register('allied_health_notes')} />
                     </Field>

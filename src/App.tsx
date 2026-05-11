@@ -9,6 +9,7 @@ import { PatientsPage } from '@/pages/PatientsPage'
 import { PatientDetailPage } from '@/pages/PatientDetailPage'
 import { CalendarPage } from '@/pages/CalendarPage'
 import { ActivitiesPage } from '@/pages/ActivitiesPage'
+import { ReferrersPage } from '@/pages/ReferrersPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 
 const queryClient = new QueryClient({
@@ -31,6 +32,7 @@ function ProtectedRoutes() {
         <Route path="patients/:id" element={<PatientDetailPage />} />
         <Route path="calendar" element={<CalendarPage />} />
         <Route path="activities" element={<ActivitiesPage />} />
+        <Route path="referrers" element={<ReferrersPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>

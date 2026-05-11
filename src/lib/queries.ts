@@ -14,11 +14,16 @@ export type Activity = Database['public']['Tables']['activities']['Row']
 export type ActivityAssignment = Database['public']['Tables']['activity_assignments']['Row']
 export type ActivityAssignmentWithActivity = ActivityAssignment & { activities: Pick<Activity, 'name' | 'category'> }
 export type SurveyResponse = Database['public']['Tables']['survey_responses']['Row']
+export type Referrer = Database['public']['Tables']['referrers']['Row']
+export type Practice = Database['public']['Tables']['practices']['Row']
 
 export const qk = {
   activities: (practiceId: string) => ['activities', practiceId] as const,
   sessionActivities: (therapySessionId: string) => ['session-activities', therapySessionId] as const,
   surveyResponses: (patientId: string) => ['survey-responses', patientId] as const,
+  referrers: (practiceId: string) => ['referrers', practiceId] as const,
+  patientReferrers: (patientId: string) => ['patient-referrers', patientId] as const,
+  practice: (practiceId: string) => ['practice', practiceId] as const,
   patients: (practiceId: string) => ['patients', practiceId] as const,
   patient: (id: string) => ['patient', id] as const,
   patientAppointments: (patientId: string) => ['patient-appointments', patientId] as const,
@@ -157,6 +162,35 @@ export async function fetchSurveyResponses(patientId: string): Promise<SurveyRes
     .select('*')
     .eq('patient_id', patientId)
     .order('captured_at', { ascending: false })
+  if (error) throw error
+  return data
+}
+
+export async function fetchReferrers(practiceId: string): Promise<Referrer[]> {
+  const { data, error } = await supabase
+    .from('referrers')
+    .select('*')
+    .eq('practice_id', practiceId)
+    .order('name')
+  if (error) throw error
+  return data
+}
+
+export async function fetchPatientReferrers(patientId: string): Promise<Referrer[]> {
+  const { data, error } = await supabase
+    .from('patient_referrers')
+    .select('referrers(*)')
+    .eq('patient_id', patientId)
+  if (error) throw error
+  return (data as unknown as { referrers: Referrer }[]).map((r) => r.referrers)
+}
+
+export async function fetchPractice(practiceId: string): Promise<Practice> {
+  const { data, error } = await supabase
+    .from('practices')
+    .select('*')
+    .eq('id', practiceId)
+    .single()
   if (error) throw error
   return data
 }

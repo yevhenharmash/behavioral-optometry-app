@@ -23,7 +23,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import {
   fetchPatient, fetchPatientAppointments, fetchVtPrograms,
-  fetchRxs, fetchApptNotes, fetchActivities, fetchSessionActivities, fetchSurveyResponses, qk,
+  fetchRxs, fetchApptNotes, fetchActivities, fetchSessionActivities, fetchSurveyResponses,
+  fetchReferrers, fetchPatientReferrers, qk,
   type Patient, type AppointmentWithPatient, type Activity,
 } from '@/lib/queries'
 import { supabase } from '@/lib/supabase'
@@ -108,7 +109,52 @@ function SectionHeader({ title }: { title: string }) {
 }
 
 // ─── Overview tab ─────────────────────────────────────────────────────────────
-function OverviewTab({ patient }: { patient: Patient }) {
+function OverviewTab({ patient, practiceId }: { patient: Patient; practiceId: string }) {
+  const queryClient = useQueryClient()
+  const [linkOpen, setLinkOpen] = useState(false)
+
+  const { data: linkedReferrers = [] } = useQuery({
+    queryKey: qk.patientReferrers(patient.id),
+    queryFn: () => fetchPatientReferrers(patient.id),
+  })
+
+  const { data: allReferrers = [] } = useQuery({
+    queryKey: qk.referrers(practiceId),
+    enabled: linkOpen,
+    queryFn: () => fetchReferrers(practiceId),
+  })
+
+  const linkMutation = useMutation({
+    mutationFn: async (referrerId: string) => {
+      const { error } = await supabase
+        .from('patient_referrers')
+        .insert({ patient_id: patient.id, referrer_id: referrerId })
+      if (error) throw error
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: qk.patientReferrers(patient.id) })
+      toast.success('Referrer linked')
+      setLinkOpen(false)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const unlinkMutation = useMutation({
+    mutationFn: async (referrerId: string) => {
+      const { error } = await supabase
+        .from('patient_referrers')
+        .delete()
+        .eq('patient_id', patient.id)
+        .eq('referrer_id', referrerId)
+      if (error) throw error
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: qk.patientReferrers(patient.id) }),
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const linkedIds = new Set(linkedReferrers.map((r) => r.id))
+  const linkable = allReferrers.filter((r) => !linkedIds.has(r.id))
+
   return (
     <div className="max-w-xl">
       <SectionHeader title="Clinical" />
@@ -136,6 +182,68 @@ function OverviewTab({ patient }: { patient: Patient }) {
           <InfoRow label="Grade / Year" value={patient.grade} />
         </>
       )}
+
+      <div className="mt-6 flex items-center justify-between mb-3">
+        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Referring Practitioners</h3>
+        <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={() => setLinkOpen(true)}>
+          <Plus className="w-3 h-3 mr-1" /> Link
+        </Button>
+      </div>
+
+      {linkedReferrers.length === 0 ? (
+        <p className="text-sm text-muted-foreground">None linked.</p>
+      ) : (
+        <ul className="space-y-2">
+          {linkedReferrers.map((r) => (
+            <li key={r.id} className="flex items-center gap-3 rounded-md border border-border p-3">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium">{r.name}</p>
+                <p className="text-xs text-muted-foreground">{[r.role, r.email].filter(Boolean).join(' · ')}</p>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-6 w-6 text-muted-foreground hover:text-destructive flex-none"
+                onClick={() => unlinkMutation.mutate(r.id)}
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <Dialog open={linkOpen} onOpenChange={setLinkOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Link Referring Practitioner</DialogTitle>
+          </DialogHeader>
+          {allReferrers.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-2">
+              No referrers in your practice yet. Add some on the Referrers page first.
+            </p>
+          ) : linkable.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-2">All referrers are already linked to this patient.</p>
+          ) : (
+            <ul className="space-y-1.5 py-2">
+              {linkable.map((r) => (
+                <li key={r.id}>
+                  <button
+                    className="w-full text-left rounded-md border border-border p-3 hover:bg-muted/40 transition-colors"
+                    onClick={() => linkMutation.mutate(r.id)}
+                  >
+                    <p className="text-sm font-medium">{r.name}</p>
+                    <p className="text-xs text-muted-foreground">{[r.role, r.email].filter(Boolean).join(' · ')}</p>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLinkOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -145,6 +253,8 @@ type NotesForm = {
   status: string
   free_text: string
   in_office_observations: string
+  summary_email_body: string
+  summary_referrer_body: string
 }
 
 type ActivityLogForm = {
@@ -397,6 +507,8 @@ function ApptNotesDialog({
       status: appt.status,
       free_text: notes?.examNote?.free_text ?? '',
       in_office_observations: notes?.therapySession?.in_office_observations ?? '',
+      summary_email_body: appt.summary_email_body ?? '',
+      summary_referrer_body: appt.summary_referrer_body ?? '',
     },
   })
 
@@ -404,7 +516,11 @@ function ApptNotesDialog({
     mutationFn: async (values: NotesForm) => {
       const { error: apptErr } = await supabase
         .from('appointments')
-        .update({ status: values.status as AppointmentWithPatient['status'] })
+        .update({
+          status: values.status as AppointmentWithPatient['status'],
+          summary_email_body: toNullable(values.summary_email_body),
+          summary_referrer_body: toNullable(values.summary_referrer_body),
+        })
         .eq('id', appt.id)
       if (apptErr) throw apptErr
 
@@ -513,6 +629,24 @@ function ApptNotesDialog({
                   </div>
                 </>
               )}
+
+              <div className="border-t border-border pt-4 space-y-4">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Summaries</p>
+                <FormField label="Patient / Family Summary">
+                  <Textarea
+                    rows={3}
+                    placeholder="Plain-language summary for patient or guardian…"
+                    {...register('summary_email_body')}
+                  />
+                </FormField>
+                <FormField label="Referrer Report">
+                  <Textarea
+                    rows={3}
+                    placeholder="Clinical summary for referring practitioner…"
+                    {...register('summary_referrer_body')}
+                  />
+                </FormField>
+              </div>
 
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={handleClose}>Cancel</Button>
@@ -1385,7 +1519,7 @@ export function PatientDetailPage() {
         </TabsList>
 
         <TabsContent value="overview">
-          <OverviewTab patient={patient} />
+          <OverviewTab patient={patient} practiceId={practiceId ?? ''} />
         </TabsContent>
 
         <TabsContent value="appointments">
